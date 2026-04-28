@@ -3,7 +3,13 @@ if (typeof Zotero === 'undefined') {
     Zotero = {};
 }
 
-//const zotDOI_is7 = Zotero.platformMajorVersion >= 102;
+var error_invalid = null;
+var error_nodoi = null;
+var error_multiple = null;
+var error_invalid_shown = false;
+var error_nodoi_shown = false;
+var error_multiple_shown = false;
+var final_count_shown = false;
 
 function _create(doc, name) {
     const elt =
@@ -22,6 +28,8 @@ ShortDOI = {
     rootURI: null,
     addedElementIDs: [],
     notifierID: null,
+    registeredMenuIDs: [],
+    maxWindowUpdateAttempts: 20,
 
     log(msg) {
         Zotero.debug("DOI Manager: " + msg);
@@ -47,18 +55,201 @@ ShortDOI = {
         this.rootURI = rootURI;
 
         // Register the callback in Zotero as an item observer
-        notifierID = Zotero.Notifier.registerObserver(
+        if (this.notifierID) {
+            Zotero.Notifier.unregisterObserver(this.notifierID);
+        }
+        this.notifierID = Zotero.Notifier.registerObserver(
             ShortDOI.notifierCallback,
             ["item"]
         );
     },
 
+    shutdown() {
+        this.unregisterMenus();
+
+        if (this.notifierID) {
+            Zotero.Notifier.unregisterObserver(this.notifierID);
+            this.notifierID = null;
+        }
+    },
+
     // Overlay management
 
-    addToWindow(window) {
+    useMenuManager() {
+        return !!(
+            Zotero.MenuManager &&
+            Zotero.MenuManager.registerMenu &&
+            Zotero.MenuManager.unregisterMenu
+        );
+    },
+
+    addLocalizationToWindow(window) {
+        if (window.MozXULElement && window.MozXULElement.insertFTLIfNeeded) {
+            window.MozXULElement.insertFTLIfNeeded("zoteroshortdoi.ftl");
+        }
+    },
+
+    registerMenus() {
+        if (!this.useMenuManager()) {
+            return;
+        }
+
+        this.unregisterMenus();
+
+        this.registeredMenuIDs.push(
+            Zotero.MenuManager.registerMenu({
+                menuID: "zoteroshortdoi-library-item-menu",
+                pluginID: this.id,
+                target: "main/library/item",
+                menus: [
+                    {
+                        menuType: "submenu",
+                        l10nID: "zoteroshortdoi-menu",
+                        menus: [
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-menu-short",
+                                onCommand: (event, context) => {
+                                    ShortDOI.updateContextItems(context, "short");
+                                },
+                            },
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-menu-long",
+                                onCommand: (event, context) => {
+                                    ShortDOI.updateContextItems(context, "long");
+                                },
+                            },
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-menu-check",
+                                onCommand: (event, context) => {
+                                    ShortDOI.updateContextItems(context, "check");
+                                },
+                            },
+                        ],
+                    },
+                ],
+            })
+        );
+
+        this.registeredMenuIDs.push(
+            Zotero.MenuManager.registerMenu({
+                menuID: "zoteroshortdoi-tools-autoretrieve-menu",
+                pluginID: this.id,
+                target: "main/menubar/tools",
+                menus: [
+                    {
+                        menuType: "submenu",
+                        l10nID: "zoteroshortdoi-autoretrieve",
+                        menus: [
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-autoretrieve-short",
+                                onShowing: (event, context) => {
+                                    ShortDOI.updatePreferenceMenuState(context, "short");
+                                },
+                                onCommand: () => {
+                                    ShortDOI.changePref("short");
+                                },
+                            },
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-autoretrieve-long",
+                                onShowing: (event, context) => {
+                                    ShortDOI.updatePreferenceMenuState(context, "long");
+                                },
+                                onCommand: () => {
+                                    ShortDOI.changePref("long");
+                                },
+                            },
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-autoretrieve-check",
+                                onShowing: (event, context) => {
+                                    ShortDOI.updatePreferenceMenuState(context, "check");
+                                },
+                                onCommand: () => {
+                                    ShortDOI.changePref("check");
+                                },
+                            },
+                            {
+                                menuType: "menuitem",
+                                l10nID: "zoteroshortdoi-autoretrieve-no",
+                                onShowing: (event, context) => {
+                                    ShortDOI.updatePreferenceMenuState(context, "none");
+                                },
+                                onCommand: () => {
+                                    ShortDOI.changePref("none");
+                                },
+                            },
+                        ],
+                    },
+                ],
+            })
+        );
+
+        this.registeredMenuIDs = this.registeredMenuIDs.filter(Boolean);
+    },
+
+    unregisterMenus() {
+        if (!this.useMenuManager()) {
+            this.registeredMenuIDs = [];
+            return;
+        }
+
+        while (this.registeredMenuIDs.length) {
+            let registeredMenuID = this.registeredMenuIDs.pop();
+            if (registeredMenuID) {
+                Zotero.MenuManager.unregisterMenu(registeredMenuID);
+            }
+        }
+    },
+
+    updateContextItems(context, operation) {
+        let items = context && context.items;
+        if (!items) {
+            items = Zotero.getActiveZoteroPane().getSelectedItems();
+        }
+        ShortDOI.updateItems(Array.from(items), operation);
+    },
+
+    updatePreferenceMenuState(context, option) {
+        let menuElem = context && context.menuElem;
+        if (!menuElem) {
+            return;
+        }
+
+        menuElem.setAttribute("type", "checkbox");
+        menuElem.setAttribute(
+            "checked",
+            String(ShortDOI.getPref("autoretrieve") === option)
+        );
+    },
+
+    addToWindow(window, attempt = 0) {
         log("Updating window")
 
+        this.addLocalizationToWindow(window);
+
         let doc = window.document;
+        let zoteroItemMenu = doc.getElementById("zotero-itemmenu");
+        let toolsPopup = doc.getElementById("menu_ToolsPopup");
+
+        if (!zoteroItemMenu || !toolsPopup) {
+            if (attempt < this.maxWindowUpdateAttempts) {
+                window.setTimeout(() => {
+                    ShortDOI.addToWindow(window, attempt + 1);
+                }, 500);
+            } else {
+                this.log(
+                    "Could not find Zotero menu containers: " +
+                    "zotero-itemmenu=" + Boolean(zoteroItemMenu) + ", " +
+                    "menu_ToolsPopup=" + Boolean(toolsPopup)
+                );
+            }
+            return;
+        }
 
         // createElementNS() necessary in Zotero 6; createElement() defaults to HTML in Zotero 7
         //let HTML_NS = "http://www.w3.org/1999/xhtml";
@@ -69,136 +260,142 @@ ShortDOI = {
         );
 
         // Item menu
-        let itemmenu = _create(doc, "menu");
-        itemmenu.id = "zotero-itemmenu-shortdoi-menu";
-        itemmenu.setAttribute("class", "menu-iconic");
-        //itemmenu.setAttribute('image', 'xxx');
-        itemmenu.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-menu-label")
-        );
+        if (!doc.getElementById("zotero-itemmenu-shortdoi-menu")) {
+            let itemmenu = _create(doc, "menu");
+            itemmenu.id = "zotero-itemmenu-shortdoi-menu";
+            itemmenu.setAttribute("class", "menu-iconic");
+            //itemmenu.setAttribute('image', 'xxx');
+            itemmenu.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-menu-label")
+            );
 
-        let itemmenupopup = _create(doc, "menupopup");
-        itemmenupopup.id = "zotero-itemmenu-shortdoi-menupopup";
+            let itemmenupopup = _create(doc, "menupopup");
+            itemmenupopup.id = "zotero-itemmenu-shortdoi-menupopup";
 
-        let updateShort = _create(doc, "menuitem");
-        updateShort.id = "zotero-itemmenu-shortdoi-short";
-        updateShort.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-menu-short-label")
-        );
-        updateShort.addEventListener("command", () => {
-            ShortDOI.updateSelectedItems("short");
-        });
+            let updateShort = _create(doc, "menuitem");
+            updateShort.id = "zotero-itemmenu-shortdoi-short";
+            updateShort.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-menu-short-label")
+            );
+            updateShort.addEventListener("command", () => {
+                ShortDOI.updateSelectedItems("short");
+            });
 
-        let updateLong = _create(doc, "menuitem");
-        updateLong.id = "zotero-itemmenu-shortdoi-long";
-        updateLong.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-menu-long-label")
-        );
-        updateLong.addEventListener("command", () => {
-            ShortDOI.updateSelectedItems("long");
-        });
+            let updateLong = _create(doc, "menuitem");
+            updateLong.id = "zotero-itemmenu-shortdoi-long";
+            updateLong.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-menu-long-label")
+            );
+            updateLong.addEventListener("command", () => {
+                ShortDOI.updateSelectedItems("long");
+            });
 
-        let updateCheck = _create(doc, "menuitem");
-        updateCheck.id = "zotero-itemmenu-shortdoi-check";
-        updateCheck.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-menu-check-label")
-        );
-        updateCheck.addEventListener("command", () => {
-            ShortDOI.updateSelectedItems("check");
-        });
+            let updateCheck = _create(doc, "menuitem");
+            updateCheck.id = "zotero-itemmenu-shortdoi-check";
+            updateCheck.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-menu-check-label")
+            );
+            updateCheck.addEventListener("command", () => {
+                ShortDOI.updateSelectedItems("check");
+            });
 
-        itemmenupopup.appendChild(updateShort);
-        itemmenupopup.appendChild(updateLong);
-        itemmenupopup.appendChild(updateCheck);
-        itemmenu.appendChild(itemmenupopup);
-        doc.getElementById("zotero-itemmenu").appendChild(itemmenu);
-        this.storeAddedElement(itemmenu);
+            itemmenupopup.appendChild(updateShort);
+            itemmenupopup.appendChild(updateLong);
+            itemmenupopup.appendChild(updateCheck);
+            itemmenu.appendChild(itemmenupopup);
+            zoteroItemMenu.appendChild(itemmenu);
+            this.storeAddedElement(itemmenu);
+        }
 
         // Tools menu
         // Preferences
         // As they are now in the main Zotero preferences in Zotero 7, this is only for Zotero 6
         if (!(Zotero.platformMajorVersion >= 102)) {
-            let menuitem = _create(doc, "menuitem");
-            menuitem.id = "menu_Tools-shortdoi-preferences";
-            menuitem.setAttribute(
-                "label",
-                stringBundle.GetStringFromName("shortdoi-preferences-label")
-            );
-            menuitem.addEventListener("command", () => {
-                ShortDOI.openPreferenceWindow();
-            });
-            doc.getElementById("menu_ToolsPopup").appendChild(menuitem);
-            this.storeAddedElement(menuitem);
+            if (!doc.getElementById("menu_Tools-shortdoi-preferences")) {
+                let menuitem = _create(doc, "menuitem");
+                menuitem.id = "menu_Tools-shortdoi-preferences";
+                menuitem.setAttribute(
+                    "label",
+                    stringBundle.GetStringFromName("shortdoi-preferences-label")
+                );
+                menuitem.addEventListener("command", () => {
+                    ShortDOI.openPreferenceWindow();
+                });
+                toolsPopup.appendChild(menuitem);
+                this.storeAddedElement(menuitem);
+            }
         }
 
         // Auto-retrieve settings
-        let submenu = _create(doc, "menu");
-        submenu.id = "menu_Tools-shortdoi-menu";
-        submenu.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-autoretrieve-label")
-        );
-        let submenupopup = _create(doc, "menupopup");
-        submenupopup.id = "menu_Tools-shortdoi-menu-popup";
-        submenupopup.addEventListener("popupshowing", () => {
-            ShortDOI.setCheck();
-        });
+        if (!doc.getElementById("menu_Tools-shortdoi-menu")) {
+            let submenu = _create(doc, "menu");
+            submenu.id = "menu_Tools-shortdoi-menu";
+            submenu.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-autoretrieve-label")
+            );
+            let submenupopup = _create(doc, "menupopup");
+            submenupopup.id = "menu_Tools-shortdoi-menu-popup";
+            submenupopup.addEventListener("popupshowing", () => {
+                ShortDOI.setCheck();
+            });
 
-        let itemShort = _create(doc, "menuitem");
-        itemShort.id = "menu_Tools-shortdoi-menu-popup-short";
-        itemShort.setAttribute("type", "checkbox");
-        itemShort.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-autoretrieve-short-label")
-        );
-        itemShort.addEventListener("command", () => {
-            ShortDOI.changePref("short");
-        });
+            let itemShort = _create(doc, "menuitem");
+            itemShort.id = "menu_Tools-shortdoi-menu-popup-short";
+            itemShort.setAttribute("type", "checkbox");
+            itemShort.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-autoretrieve-short-label")
+            );
+            itemShort.addEventListener("command", () => {
+                ShortDOI.changePref("short");
+            });
 
-        let itemLong = _create(doc, "menuitem");
-        itemLong.id = "menu_Tools-shortdoi-menu-popup-long";
-        itemLong.setAttribute("type", "checkbox");
-        itemLong.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-autoretrieve-long-label")
-        );
-        itemLong.addEventListener("command", () => {
-            ShortDOI.changePref("long");
-        });
+            let itemLong = _create(doc, "menuitem");
+            itemLong.id = "menu_Tools-shortdoi-menu-popup-long";
+            itemLong.setAttribute("type", "checkbox");
+            itemLong.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-autoretrieve-long-label")
+            );
+            itemLong.addEventListener("command", () => {
+                ShortDOI.changePref("long");
+            });
 
-        let itemCheck = _create(doc, "menuitem");
-        itemCheck.id = "menu_Tools-shortdoi-menu-popup-check";
-        itemCheck.setAttribute("type", "checkbox");
-        itemCheck.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-autoretrieve-check-label")
-        );
-        itemCheck.addEventListener("command", () => {
-            ShortDOI.changePref("check");
-        });
+            let itemCheck = _create(doc, "menuitem");
+            itemCheck.id = "menu_Tools-shortdoi-menu-popup-check";
+            itemCheck.setAttribute("type", "checkbox");
+            itemCheck.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-autoretrieve-check-label")
+            );
+            itemCheck.addEventListener("command", () => {
+                ShortDOI.changePref("check");
+            });
 
-        let itemNone = _create(doc, "menuitem");
-        itemNone.id = "menu_Tools-shortdoi-menu-popup-none";
-        itemNone.setAttribute("type", "checkbox");
-        itemNone.setAttribute(
-            "label",
-            stringBundle.GetStringFromName("shortdoi-autoretrieve-no-label")
-        );
-        itemNone.addEventListener("command", () => {
-            ShortDOI.changePref("none");
-        });
+            let itemNone = _create(doc, "menuitem");
+            itemNone.id = "menu_Tools-shortdoi-menu-popup-none";
+            itemNone.setAttribute("type", "checkbox");
+            itemNone.setAttribute(
+                "label",
+                stringBundle.GetStringFromName("shortdoi-autoretrieve-no-label")
+            );
+            itemNone.addEventListener("command", () => {
+                ShortDOI.changePref("none");
+            });
 
-        submenupopup.appendChild(itemShort);
-        submenupopup.appendChild(itemLong);
-        submenupopup.appendChild(itemCheck);
-        submenupopup.appendChild(itemNone);
-        submenu.appendChild(submenupopup);
-        doc.getElementById("menu_ToolsPopup").appendChild(submenu);
-        this.storeAddedElement(submenu);
+            submenupopup.appendChild(itemShort);
+            submenupopup.appendChild(itemLong);
+            submenupopup.appendChild(itemCheck);
+            submenupopup.appendChild(itemNone);
+            submenu.appendChild(submenupopup);
+            toolsPopup.appendChild(submenu);
+            this.storeAddedElement(submenu);
+        }
 
         // Use strings from make-it-red.ftl (Fluent) in Zotero 7
         /*if (is7) {
@@ -217,7 +414,7 @@ ShortDOI = {
     addToAllWindows() {
         var windows = Zotero.getMainWindows();
         for (let win of windows) {
-            if (!win.ZoteroPane) continue;
+            if (!win.document) continue;
             this.addToWindow(win);
         }
     },
@@ -225,6 +422,9 @@ ShortDOI = {
     storeAddedElement(elem) {
         if (!elem.id) {
             throw new Error("Element must have an id");
+        }
+        if (this.addedElementIDs.includes(elem.id)) {
+            return;
         }
         this.addedElementIDs.push(elem.id);
     },
@@ -237,13 +437,14 @@ ShortDOI = {
             let elem = doc.getElementById(id);
             if (elem) elem.remove();
         }
-        //doc.querySelector('[href="zoteroshortdoi.ftl"]').remove();
+        let l10nLink = doc.querySelector('[href="zoteroshortdoi.ftl"]');
+        if (l10nLink) l10nLink.remove();
     },
 
     removeFromAllWindows() {
         var windows = Zotero.getMainWindows();
         for (let win of windows) {
-            if (!win.ZoteroPane) continue;
+            if (!win.document) continue;
             this.removeFromWindow(win);
         }
     },

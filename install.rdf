@@ -5,21 +5,21 @@
     xmlns:RDF="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
     <RDF:Description
         RDF:about="urn:mozilla:install-manifest"
-        em:id="zoteroshortdoi@wiernik.org"
-        em:name="DOI Manager"
-        em:version="1.5.1"
+        em:id="zotero-doi-manager-zotero9@kdmsnr.github.io"
+        em:name="DOI Manager for Zotero 9"
+        em:version="1.5.1.1"
         em:type="2"
-        em:creator="Brenton M. Wiernik"
-        em:description="Plugin for fetching and validating DOI and shortDOI names"
-        em:homepageURL="https://github.com/bwiernik/zotero-shortdoi"
-        em:updateURL="https://raw.githubusercontent.com/bwiernik/zotero-shortdoi/master/update.json">
+        em:creator="Brenton M. Wiernik; Zotero 9 fork by kdmsnr"
+        em:description="Zotero 9 fork of DOI Manager for fetching and validating DOI and shortDOI names"
+        em:homepageURL="https://github.com/kdmsnr/zotero-shortdoi"
+        em:updateURL="https://raw.githubusercontent.com/kdmsnr/zotero-shortdoi/master/update.rdf">
         <em:type>2</em:type>
         <em:bootstrap>true</em:bootstrap>
         <em:targetApplication>
             <Description>
                 <em:id>zotero@chnm.gmu.edu</em:id>
                 <em:minVersion>6.0</em:minVersion>
-                <em:maxVersion>7.*</em:maxVersion>
+                <em:maxVersion>9.*</em:maxVersion>
             </Description>
         </em:targetApplication>
         <em:targetApplication>

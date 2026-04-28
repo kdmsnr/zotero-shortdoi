@@ -3,6 +3,7 @@ if (typeof Zotero == 'undefined') {
 }
 var ShortDOI;
 var chromeHandle;
+var importedServices;
 
 let mainWindowListener;
 
@@ -10,20 +11,36 @@ function log(msg) {
     Zotero.debug("DOI Manager: " + msg);
 }
 
+function loadServices() {
+    if (typeof Services != 'undefined') {
+        return Services;
+    }
+    if (importedServices) {
+        return importedServices;
+    }
+
+    if (ChromeUtils.importESModule) {
+        importedServices = ChromeUtils.importESModule("resource://gre/modules/Services.sys.mjs").Services;
+    } else {
+        importedServices = ChromeUtils.import("resource://gre/modules/Services.jsm").Services;
+    }
+    return importedServices;
+}
+
 // In Zotero 6, bootstrap methods are called before Zotero is initialized, and using include.js
 // to get the Zotero XPCOM service would risk breaking Zotero startup. Instead, wait for the main
 // Zotero window to open and get the Zotero object from there.
 //
-// In Zotero 7, bootstrap methods are not called until Zotero is initialized, and the 'Zotero' is
-// automatically made available.
+// In Zotero 7 and later, bootstrap methods are not called until Zotero is initialized, and 'Zotero'
+// is automatically made available.
 async function waitForZotero() {
     if (typeof Zotero != 'undefined') {
         await Zotero.initializationPromise;
         return;
     }
 
-    var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-    var windows = Services.wm.getEnumerator('navigator:browser');
+    var services = loadServices();
+    var windows = services.wm.getEnumerator('navigator:browser');
     var found = false;
     while (windows.hasMoreElements()) {
         let win = windows.getNext();
@@ -52,7 +69,7 @@ async function waitForZotero() {
                                 false
                             );
                             if (domWindow.Zotero) {
-                                Services.wm.removeListener(listener);
+                                services.wm.removeListener(listener);
                                 Zotero = domWindow.Zotero;
                                 resolve();
                             }
@@ -61,7 +78,7 @@ async function waitForZotero() {
                     );
                 },
             };
-            Services.wm.addListener(listener);
+            services.wm.addListener(listener);
         });
     }
     await Zotero.initializationPromise;
@@ -69,6 +86,7 @@ async function waitForZotero() {
 
 // Adds main window open/close listeners in Zotero 6
 function listenForMainWindowEvents() {
+    var services = loadServices();
     mainWindowListener = {
         onOpenWindow: function (aWindow) {
             let domWindow = aWindow
@@ -99,18 +117,19 @@ function listenForMainWindowEvents() {
             onMainWindowUnload({ window: domWindow });
         },
     };
-    Services.wm.addListener(mainWindowListener);
+    services.wm.addListener(mainWindowListener);
 }
 
 function removeMainWindowListener() {
     if (mainWindowListener) {
-        Services.wm.removeListener(mainWindowListener);
+        loadServices().wm.removeListener(mainWindowListener);
     }
 }
 
 // Loads default preferences from prefs.js in Zotero 6
 function setDefaultPrefs(rootURI) {
-    var branch = Services.prefs.getDefaultBranch("");
+    var services = loadServices();
+    var branch = services.prefs.getDefaultBranch("");
     var obj = {
         pref(pref, value) {
             switch (typeof value) {
@@ -128,7 +147,7 @@ function setDefaultPrefs(rootURI) {
             }
         },
     };
-    Services.scriptloader.loadSubScript(rootURI + "prefs.js", obj);
+    services.scriptloader.loadSubScript(rootURI + "prefs.js", obj);
 }
 
 async function install() {
@@ -142,10 +161,7 @@ async function startup({ id, version, resourceURI, rootURI = resourceURI.spec })
 
     log("Starting");
 
-    // 'Services' may not be available in Zotero 6
-    if (typeof Services == 'undefined') {
-        var { Services } = ChromeUtils.import("resource://gre/modules/Services.jsm");
-    }
+    var services = loadServices();
 
     if (Zotero.platformMajorVersion < 102) {
         // Listen for window load/unload events in Zotero 6, since onMainWindowLoad/Unload don't
@@ -158,19 +174,19 @@ async function startup({ id, version, resourceURI, rootURI = resourceURI.spec })
     var aomStartup = Cc[
         "@mozilla.org/addons/addon-manager-startup;1"
     ].getService(Ci.amIAddonManagerStartup);
-    var manifestURI = Services.io.newURI(rootURI + "manifest.json");
+    var manifestURI = services.io.newURI(rootURI + "manifest.json");
     chromeHandle = aomStartup.registerChrome(manifestURI, [
         ["locale", "zoteroshortdoi", "en-US", "locale/en-US/"],
         ["locale", "zoteroshortdoi", "de", "locale/de/"],
     ]);
 
-    Services.scriptloader.loadSubScript(rootURI + "zoteroshortdoi.js");
+    services.scriptloader.loadSubScript(rootURI + "zoteroshortdoi.js");
 
     ShortDOI.init({ id, version, rootURI });
 
     if (Zotero.platformMajorVersion >= 102) {
         Zotero.PreferencePanes.register({
-            pluginID: 'zoteroshortdoi@wiernik.org',
+            pluginID: id,
             src: rootURI + 'content/options.xhtml',
             //scripts: ['prefs.js'],
             //stylesheets: ['prefs.css'],
@@ -186,14 +202,6 @@ function onMainWindowLoad({ window }) {
 
 function onMainWindowUnload({ window }) {
     ShortDOI.removeFromWindow(window);
-
-    window.addEventListener(
-        "unload",
-        function (e) {
-            Zotero.Notifier.unregisterObserver(ShortDOI.notifierID);
-        },
-        false
-    );
 }
 
 function shutdown() {
@@ -203,11 +211,16 @@ function shutdown() {
         removeMainWindowListener();
     }
 
-    chromeHandle.destruct();
-    chromeHandle = null;
+    if (ShortDOI) {
+        ShortDOI.shutdown();
+        ShortDOI.removeFromAllWindows();
+        ShortDOI = undefined;
+    }
 
-    ShortDOI.removeFromAllWindows();
-    ShortDOI = undefined;
+    if (chromeHandle) {
+        chromeHandle.destruct();
+        chromeHandle = null;
+    }
 }
 
 function uninstall() {

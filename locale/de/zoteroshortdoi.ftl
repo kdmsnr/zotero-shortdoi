@@ -1,4 +1,17 @@
+zoteroshortdoi-menu =
+    .label = DOIs verwalten
+
+zoteroshortdoi-menu-short =
+    .label = Frage shortDOIs ab
+
+zoteroshortdoi-menu-long =
+    .label = Frage lange DOIs ab
+
+zoteroshortdoi-menu-check =
+    .label = Prüfe und räume DOIs auf
+
 zoteroshortdoi-autoretrieve = DOIs für neue Einträge abfragen
+    .label = DOIs für neue Einträge abfragen
 
 zoteroshortdoi-autoretrieve-short =
     .label = shortDOIs

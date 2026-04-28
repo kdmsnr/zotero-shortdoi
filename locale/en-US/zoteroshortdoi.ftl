@@ -1,4 +1,17 @@
+zoteroshortdoi-menu =
+    .label = Manage DOIs
+
+zoteroshortdoi-menu-short =
+    .label = Get shortDOIs
+
+zoteroshortdoi-menu-long =
+    .label = Get long DOIs
+
+zoteroshortdoi-menu-check =
+    .label = Verify and clean DOIs
+
 zoteroshortdoi-autoretrieve = Get DOIs for new items
+    .label = Get DOIs for new items
 
 zoteroshortdoi-autoretrieve-short =
     .label = shortDOIs

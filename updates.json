@@ -1,10 +1,10 @@
 {
   "addons": {
-    "zoteroshortdoi@wiernik.org": {
+    "zotero-doi-manager-zotero9@kdmsnr.github.io": {
       "updates": [
         {
-          "version": "1.5.1",
-          "update_link": "https://github.com/bwiernik/zotero-shortdoi/releases/download/v1.5.1/zotero-doi-manager-1.5.1.xpi",
+          "version": "1.5.1.1",
+          "update_link": "https://github.com/kdmsnr/zotero-shortdoi/releases/download/v1.5.1-zotero9-r1/zotero-doi-manager-zotero9-1.5.1.1.xpi",
           "applications": {
             "gecko": {
               "strict_min_version": "60.9",
@@ -12,7 +12,7 @@
             },
             "zotero": {
               "strict_min_version": "6.999",
-              "strict_max_version": "7.0.*"
+              "strict_max_version": "9.0.*"
             }
           }
         }
